@@ -192,6 +192,9 @@ python sample.py \
     --start="What is the answer to life, the universe, and everything?" \
     --num_samples=5 --max_new_tokens=100
 ```
+e.g:
+before run the example case, you should move the trained pt into the out
+python sample.py  --init_from=resume  --start="介绍下小医仙"  --num_samples=5 --max_new_tokens=200
 
 If you'd like to sample from a model you trained, use the `--out_dir` to point the code appropriately. You can also prompt the model with some text from a file, e.g. ```python sample.py --start=FILE:prompt.txt```.
 
