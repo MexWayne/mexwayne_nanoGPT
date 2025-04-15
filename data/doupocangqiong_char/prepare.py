@@ -9,7 +9,7 @@ import pickle
 import requests
 import numpy as np
 
-# download the tiny shakespeare dataset
+# get the doupocangqiong dataset, casuse we have already download into the txt
 input_file_path = os.path.join(os.path.dirname(__file__), 'input.txt')
 if not os.path.exists(input_file_path):
     print("error: can not find the input.txt")
