@@ -15,6 +15,28 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
+
+def visualize_attention(attn_matrix, tokens, title):
+    import matplotlib
+    # the add must be ahead of import plt
+    matplotlib.use("Agg") 
+    import matplotlib.pyplot as plt
+    from matplotlib import font_manager
+
+    font_path = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+    font_prop = font_manager.FontProperties(fname=font_path)
+    plt.figure(figsize=(6, 5))
+    plt.imshow(attn_matrix, cmap='viridis')
+    # 设置标题和轴标签，确保使用 fontproperties
+    plt.title(title, fontproperties=font_prop)
+    #plt.xticks(range(len(tokens)), tokens, rotation=90, fontproperties=font_prop)
+    plt.xticks(range(len(tokens)), tokens, fontproperties=font_prop)
+    plt.yticks(range(len(tokens)), tokens, fontproperties=font_prop)
+    plt.tight_layout()
+    plt.savefig(f"./visual_weight/{title}.png")
+    plt.close()
+
+
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
 
@@ -42,12 +64,17 @@ class CausalSelfAttention(nn.Module):
         self.n_embd = config.n_embd
         self.dropout = config.dropout
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
-        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+        # if the we use the flash attention, we can not visualize the attention map
+        if True:
+            self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+        else:
+            self.flash = False 
         if not self.flash:
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
             # causal mask to ensure that attention is only applied to the left in the input sequence
             self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
                                         .view(1, 1, config.block_size, config.block_size))
+        self.last_attn_weights = None
 
     def forward(self, x):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
@@ -62,12 +89,14 @@ class CausalSelfAttention(nn.Module):
         if self.flash:
             # efficient attention using Flash Attention CUDA kernels
             y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
+            self.last_attn_weights = None # flash attention can not eport the weight
         else:
             # manual implementation of attention
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
             att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
             att = F.softmax(att, dim=-1)
             att = self.attn_dropout(att)
+            self.last_attn_weights = att.detach().cpu()
             y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
@@ -177,8 +206,21 @@ class GPT(nn.Module):
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
-        for block in self.transformer.h:
+        for block_idx, block in enumerate(self.transformer.h, start=0):
             x = block(x)
+
+            # visualize the attention #########################################################################
+            # only if the flash attention is closed
+            if block.attn.flash is False:
+                attn_weights = self.transformer.h[block_idx].attn.last_attn_weights
+                # shape: [B, n_head, T, T]
+                for head_idx in range(self.config.n_head):
+                    if attn_weights is not None:
+                        attn_matrix = attn_weights[0, head_idx].numpy()
+                        tokens = ["萧","炎","没","有","斗","气"]
+                        visualize_attention(attn_matrix, tokens, title=f"Layer {block_idx}, Head {head_idx}")
+            # ##################################################################################################
+
         x = self.transformer.ln_f(x)
 
         if targets is not None:
